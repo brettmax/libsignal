@@ -1,0 +1,8 @@
+{
+  "name": "@automator/shared",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Type-only contract shared by the server and the web UI. Must never contain runtime code.",
+  "types": "src/index.ts",
+  "main": "src/index.ts"
+}
