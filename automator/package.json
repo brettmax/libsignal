@@ -1,0 +1,15 @@
+{
+  "name": "signal-automator",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Automated Signal messaging: repeaters with countdowns, keyword catchers and a scripting library, driven through signal-cli on the local machine.",
+  "workspaces": ["shared", "server", "web"],
+  "scripts": {
+    "dev": "npm run dev -w server & npm run dev -w web",
+    "build": "npm run build -w server && npm run build -w web",
+    "start": "npm run start -w server",
+    "test": "npm test -w server && npm test -w web",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w web"
+  },
+  "engines": { "node": ">=20" }
+}
