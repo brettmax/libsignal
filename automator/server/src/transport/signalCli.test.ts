@@ -184,6 +184,33 @@ describe('SignalCliTransport', () => {
     await t.close();
   });
 
+  it('gives up on an attempt when the daemon never answers', async () => {
+    const fakeFetch = ((_url: string | URL, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      })) as typeof fetch;
+    const t = new SignalCliTransport({ baseUrl: 'http://x', logger: logger(), fetch: fakeFetch, connectTimeoutMs: 30 });
+    await expect(t.connect()).rejects.toThrow(/no response within 30ms/);
+    await t.close();
+  });
+
+  it('close() then connect() runs a single receive loop', async () => {
+    let attempts = 0;
+    const fakeFetch = (async () => {
+      attempts++;
+      throw new TypeError('fetch failed');
+    }) as unknown as typeof fetch;
+    const t = new SignalCliTransport({ baseUrl: 'http://x', logger: logger(), fetch: fakeFetch, minBackoffMs: 20, maxBackoffMs: 20 });
+    await expect(t.connect()).rejects.toThrow();
+    await t.close();
+    await expect(t.connect()).rejects.toThrow();
+    const before = attempts;
+    await new Promise((r) => setTimeout(r, 110));
+    await t.close();
+    // one loop retrying every 20ms makes ~5 attempts in 110ms; two loops would make ~10
+    expect(attempts - before).toBeLessThanOrEqual(6);
+  });
+
   it('reconnects when the stream ends', async () => {
     let attempts = 0;
     const fakeFetch = (async () => {

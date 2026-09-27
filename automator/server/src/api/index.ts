@@ -45,6 +45,12 @@ export interface ApiDeps {
    * Pass null to disable the check (only sensible when deliberately exposed).
    */
   allowedHosts?: string[] | null;
+  /**
+   * Resolves once the automator has started (state loaded). Until then every
+   * /api route except GET /api/status waits for it, and WebSocket clients get
+   * their snapshot only after it; if it rejects they get 503. Omit when already started.
+   */
+  ready?: Promise<unknown>;
 }
 
 export interface Api {
@@ -102,6 +108,19 @@ export function createApi(deps: ApiDeps): Api {
       ? null
       : new Set((deps.allowedHosts ?? DEFAULT_ALLOWED_HOSTS).map((x) => x.toLowerCase()));
 
+  // Readiness: the HTTP server listens before the engine has loaded its state, so
+  // health checks answer early while nothing reads or mutates half-initialised state.
+  let isReady = !deps.ready;
+  let startupError: unknown = null;
+  const whenReady: Promise<void> = (deps.ready ?? Promise.resolve()).then(
+    () => {
+      isReady = true;
+    },
+    (err: unknown) => {
+      startupError = err ?? new Error('startup failed');
+    },
+  );
+
   const snapshot = (): AppState => ({
     status: transport.status(),
     contacts: automator.contacts(),
@@ -125,6 +144,14 @@ export function createApi(deps: ApiDeps): Api {
   });
 
   const api = express.Router();
+  api.use((req, res, next) => {
+    if (isReady || (req.method === 'GET' && req.path === '/status')) return next();
+    void whenReady.then(() => {
+      if (startupError) {
+        res.status(503).json({ error: 'server failed to start' } satisfies ApiError);
+      } else next();
+    });
+  });
   api.use(express.json({ limit: '2mb' }));
 
   // ------------------------------------------------------------ state
@@ -267,26 +294,34 @@ export function createApi(deps: ApiDeps): Api {
     server.on('upgrade', onUpgrade);
 
     const alive = new WeakMap<WebSocket, boolean>();
-    const sendTo = (ws: WebSocket, ev: ServerEvent) => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(ev));
-    };
+    /** Clients that have received their snapshot; only they get incremental events. */
+    const live = new Set<WebSocket>();
     const broadcast = (ev: ServerEvent) => {
-      if (wss.clients.size === 0) return;
+      if (live.size === 0) return;
       const data = JSON.stringify(ev);
-      for (const ws of wss.clients) if (ws.readyState === WebSocket.OPEN) ws.send(data);
+      for (const ws of live) if (ws.readyState === WebSocket.OPEN) ws.send(data);
     };
 
     wss.on('connection', (ws) => {
       alive.set(ws, true);
       ws.on('pong', () => alive.set(ws, true));
       ws.on('error', () => ws.terminate());
-      // Clients only listen; ignore anything they send.
-      try {
-        sendTo(ws, { type: 'snapshot', state: snapshot() });
-      } catch (err) {
-        logger.log('error', 'api', `failed to build snapshot: ${(err as Error).message}`);
-        ws.close(1011, 'snapshot failed');
-      }
+      ws.on('close', () => live.delete(ws));
+      // Clients only listen; anything they send is ignored.
+      void whenReady.then(() => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        if (startupError) {
+          ws.close(1011, 'server failed to start');
+          return;
+        }
+        try {
+          ws.send(JSON.stringify({ type: 'snapshot', state: snapshot() } satisfies ServerEvent));
+          live.add(ws);
+        } catch (err) {
+          logger.log('error', 'api', `failed to build snapshot: ${(err as Error).message}`);
+          ws.close(1011, 'snapshot failed');
+        }
+      });
     });
 
     const unsubs = [
@@ -309,6 +344,7 @@ export function createApi(deps: ApiDeps): Api {
 
     return () => {
       clearInterval(heartbeat);
+      live.clear();
       for (const u of unsubs) u();
       server.off('upgrade', onUpgrade);
       for (const ws of wss.clients) ws.terminate();
