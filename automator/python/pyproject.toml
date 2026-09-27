@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "signal-automator"
+version = "0.1.0"
+description = "Standard-library Python client and CLI for the Signal Automator REST API"
+requires-python = ">=3.9"
+dependencies = []
+keywords = ["signal", "signal-cli", "automation", "messaging"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Communications :: Chat",
+]
+
+[project.scripts]
+signal-automator = "signal_automator.cli:main"
+
+[tool.setuptools]
+packages = ["signal_automator"]

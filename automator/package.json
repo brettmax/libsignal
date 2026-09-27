@@ -5,7 +5,7 @@
   "description": "Automated Signal messaging: repeaters with countdowns, keyword catchers and a scripting library, driven through signal-cli on the local machine.",
   "workspaces": ["shared", "server", "web"],
   "scripts": {
-    "dev": "npm run dev -w server & npm run dev -w web",
+    "dev": "node dev.mjs",
     "build": "npm run build -w server && npm run build -w web",
     "start": "npm run start -w server",
     "test": "npm test -w server && npm test -w web",
