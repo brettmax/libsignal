@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "description": "Makes Node.js and editors treat the .js files in this folder as ES modules (export default function setup(bot) {...}). Not a package: there is nothing to install here.",
+  "type": "module"
+}
