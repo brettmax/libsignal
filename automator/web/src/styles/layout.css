@@ -1,0 +1,169 @@
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 10px var(--gutter);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand h1 {
+  font-size: 1.1rem;
+  font-weight: 650;
+}
+
+.header-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.app-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+}
+
+.app-nav {
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  padding: 16px 10px;
+}
+
+.app-nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: sticky;
+  top: 72px;
+}
+
+.app-nav a {
+  display: block;
+  padding: 8px 12px;
+  border-radius: var(--radius-small);
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.app-nav a:hover {
+  background: var(--surface-2);
+}
+
+.app-nav a[aria-current='page'] {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.app-main {
+  padding: 20px var(--gutter) 48px;
+  min-width: 0;
+  max-width: 1200px;
+  width: 100%;
+}
+
+.app-main:focus {
+  outline: none;
+}
+
+.view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.view-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.view-title {
+  font-size: 1.4rem;
+}
+
+.view-intro {
+  margin-top: -8px;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.scripts-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 860px) {
+  .scripts-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  :root {
+    --gutter: 16px;
+  }
+
+  .app-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-nav {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 6px var(--gutter);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .app-nav ul {
+    flex-direction: row;
+    position: static;
+    gap: 4px;
+  }
+
+  .app-nav a {
+    white-space: nowrap;
+    padding: 6px 10px;
+  }
+
+  .app-header {
+    position: static;
+  }
+
+  .app-main {
+    padding-top: 16px;
+  }
+}
