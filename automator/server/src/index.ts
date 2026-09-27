@@ -73,6 +73,17 @@ async function main(): Promise<void> {
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK'] as const) {
     process.on(sig, () => void shutdown(sig));
   }
+  // The engine guards everything that goes through the bot API, but a user
+  // script can still throw from its own raw setTimeout or an unawaited promise.
+  // Log those rather than letting one script take the whole server down.
+  const describe = (err: unknown): string =>
+    err instanceof Error ? (err.stack ?? err.message) : String(err);
+  process.on('unhandledRejection', (err) => {
+    logger.log('error', 'server', `Unhandled promise rejection: ${describe(err)}`);
+  });
+  process.on('uncaughtException', (err) => {
+    logger.log('error', 'server', `Uncaught exception: ${describe(err)}`);
+  });
 
   // Listen first: the port doubles as a single-instance lock, so a second copy
   // fails here, before it could start repeaters and double-send.
