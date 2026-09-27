@@ -1,5 +1,12 @@
 # Overview
 
+> **This fork adds [Signal Automator](automator/README.md)** in the `automator/` directory: a
+> local app for sending automated Signal messages (repeating messages with countdown pauses,
+> keyword catchers, and a JavaScript scripting library for handling incoming and outgoing
+> messages), with a React + TypeScript web UI, a Python client and PowerShell/bash launchers.
+> It drives your already-linked Signal account through signal-cli and does not modify or
+> depend on the Rust library below. See [automator/README.md](automator/README.md) to get started.
+
 libsignal contains platform-agnostic APIs used by the official Signal clients and servers, exposed
 as a Java, Swift, or TypeScript library. The underlying implementations are written in Rust:
 
