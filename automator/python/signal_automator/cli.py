@@ -19,7 +19,7 @@ import os
 import sys
 import time
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import __version__
 from .client import AutomatorClient, AutomatorError, MATCH_TYPES, SCOPES, default_url, rule_action
@@ -570,12 +570,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_repeat_add)
     p = rsub.add_parser('list', aliases=['ls'], help='list repeaters with their countdowns')
     p.set_defaults(func=cmd_repeat_list)
-    for name, aliases, fn, done, help_text in (
+    # Annotated explicitly: older mypy (1.9, as in CI) joins the mixed tuple
+    # elements to `object`, which add_parser's `aliases` rejects.
+    repeater_actions: List[Tuple[str, List[str], Callable[[AutomatorClient, str], Any], str, str]] = [
         ('run', [], lambda c, i: c.run_repeater(i), 'Ran', 'send the next message now and restart the countdown'),
         ('enable', ['start'], lambda c, i: c.enable_repeater(i), 'Started', 'start the countdown'),
         ('disable', ['stop'], lambda c, i: c.disable_repeater(i), 'Stopped', 'stop the countdown'),
         ('rm', ['delete'], lambda c, i: c.delete_repeater(i), 'Deleted', 'delete a repeater'),
-    ):
+    ]
+    for name, aliases, fn, done, help_text in repeater_actions:
         p = rsub.add_parser(name, aliases=aliases, help=help_text)
         p.add_argument('id', help='repeater id (a unique prefix is enough) or exact name')
         p.set_defaults(func=_repeater_action(fn, done))
