@@ -202,6 +202,20 @@ describe('REST API', () => {
     expect(typeof nf.json.error).toBe('string');
   });
 
+  it('bodiless POSTs work with or without a JSON content type', async () => {
+    for (const headers of [{}, { 'content-type': 'application/json' }] as Record<string, string>[]) {
+      const r1 = await fetch(base + '/api/contacts/refresh', { method: 'POST', headers });
+      expect(r1.status).toBe(200);
+      const r2 = await fetch(base + '/api/repeaters/r1/run', { method: 'POST', headers });
+      expect(r2.status).toBe(200);
+      const r3 = await fetch(base + '/api/scripts/reload', { method: 'POST', headers });
+      expect(r3.status).toBe(200);
+    }
+    const del = await fetch(base + '/api/rules/k1', { method: 'DELETE' });
+    expect(del.status).toBe(204);
+    expect(await del.text()).toBe('');
+  });
+
   it('rejects foreign hosts and origins', async () => {
     const r = await req('POST', '/api/send', { to: { kind: 'contact', id: '+1' }, body: 'hi' }, { origin: 'https://evil.example' });
     expect(r.status).toBe(403);
@@ -261,5 +275,54 @@ describe('WebSocket', () => {
       });
     expect(await fail(base.replace('http', 'ws') + '/other')).toBe(true);
     expect(await fail(base.replace('http', 'ws') + '/ws', { origin: 'https://evil.example' })).toBe(true);
+  });
+});
+
+describe('startup readiness', () => {
+  it('answers /api/status at once but holds other routes and the WS snapshot until ready', async () => {
+    let markReady!: () => void;
+    const ready = new Promise<void>((r) => (markReady = r));
+    const api = createApi({ automator: fake, logger, transport, ready });
+    const srv = http.createServer(api.app);
+    const close = api.attachWebSocket(srv);
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+    try {
+      expect((await fetch(url + '/api/status')).status).toBe(200);
+      let stateDone = false;
+      const state = fetch(url + '/api/state').then((r) => ((stateDone = true), r.status));
+      const got: string[] = [];
+      const ws = new WebSocket(url.replace('http', 'ws') + '/ws');
+      ws.on('message', (d) => got.push(JSON.parse(String(d)).type));
+      await new Promise((r) => ws.on('open', r));
+      logger.log('info', 'test', 'before ready'); // must not reach the client before its snapshot
+      await new Promise((r) => setTimeout(r, 50));
+      expect(stateDone).toBe(false);
+      expect(got).toEqual([]);
+      markReady();
+      expect(await state).toBe(200);
+      const deadline = Date.now() + 2000;
+      while (got.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5));
+      expect(got).toEqual(['snapshot']);
+      ws.close();
+    } finally {
+      close();
+      await new Promise((r) => srv.close(r));
+    }
+  });
+
+  it('returns 503 when startup failed', async () => {
+    const ready = Promise.reject(new Error('boom'));
+    const api = createApi({ automator: fake, logger, transport, ready });
+    const srv = http.createServer(api.app);
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+    try {
+      const r = await fetch(url + '/api/state');
+      expect(r.status).toBe(503);
+      expect(await r.json()).toEqual({ error: 'server failed to start' });
+    } finally {
+      await new Promise((r) => srv.close(r));
+    }
   });
 });

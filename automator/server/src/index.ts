@@ -27,16 +27,55 @@ async function main(): Promise<void> {
       `AUTOMATOR_HOST=${config.host}: the UI (which controls your Signal account) is reachable from the network with no authentication`,
     );
   }
+
+  let markReady!: () => void;
+  let markFailed!: (err: unknown) => void;
+  const ready = new Promise<void>((resolve, reject) => {
+    markReady = resolve;
+    markFailed = reject;
+  });
+  ready.catch(() => {}); // the api reports it; main() exits
+
   const api = createApi({
     automator,
     logger,
     transport,
     webDist: config.webDist,
     allowedHosts: wildcard ? null : [...DEFAULT_ALLOWED_HOSTS, config.host],
+    ready,
   });
-
   const server = http.createServer(api.app);
   const closeWs = api.attachWebSocket(server);
+
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) process.exit(1);
+    shuttingDown = true;
+    logger.log('info', 'server', `${signal} received, shutting down`);
+    const force = setTimeout(() => process.exit(1), 10000);
+    force.unref();
+    const step = async (what: string, fn: () => Promise<void>) => {
+      try {
+        await fn();
+      } catch (err) {
+        logger.log('error', 'server', `${what} failed: ${(err as Error).message}`);
+      }
+    };
+    await step('automator.stop', () => automator.stop());
+    await step('transport.close', () => transport.close());
+    await step('store.flush', () => store.flush());
+    closeWs();
+    server.closeAllConnections?.();
+    if (server.listening) server.close(() => process.exit(0));
+    else process.exit(0);
+  };
+  // SIGHUP: terminal closed (and console window closed on Windows); SIGBREAK: Ctrl+Break on Windows.
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK'] as const) {
+    process.on(sig, () => void shutdown(sig));
+  }
+
+  // Listen first: the port doubles as a single-instance lock, so a second copy
+  // fails here, before it could start repeaters and double-send.
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(config.port, config.host, () => {
@@ -52,55 +91,58 @@ async function main(): Promise<void> {
   );
 
   try {
-    await transport.connect();
+    try {
+      await transport.connect();
+    } catch (err) {
+      logger.log(
+        'warn',
+        'server',
+        `could not reach signal-cli yet (${(err as Error).message}); will keep retrying. ` +
+          `Start it with: signal-cli -a <ACCOUNT> daemon --http 127.0.0.1:7584`,
+      );
+    }
+
+    // Reload contacts/groups whenever signal-cli (re)connects after startup,
+    // e.g. when the server came up before the daemon did.
+    let engineStarted = false;
+    let reconnectedDuringStart = false;
+    let prevState = transport.status().state;
+    const refresh = () =>
+      automator
+        .refreshContacts()
+        .catch((err: unknown) => logger.log('warn', 'server', `contact refresh failed: ${(err as Error).message}`));
+    transport.onStatus((s) => {
+      const becameConnected = s.state === 'connected' && prevState !== 'connected';
+      prevState = s.state;
+      if (!becameConnected || shuttingDown) return;
+      if (engineStarted) void refresh();
+      else reconnectedDuringStart = true;
+    });
+
+    await automator.start();
+    engineStarted = true;
+    if (reconnectedDuringStart) void refresh();
   } catch (err) {
-    logger.log(
-      'warn',
-      'server',
-      `could not reach signal-cli yet (${(err as Error).message}); will keep retrying. ` +
-        `Start it with: signal-cli -a <ACCOUNT> daemon --http 127.0.0.1:7584`,
-    );
+    markFailed(err);
+    throw err;
   }
-  await automator.start();
+  markReady();
 
   const addr = server.address();
   const port = addr && typeof addr === 'object' ? addr.port : config.port;
   const shownHost = config.host.includes(':') ? `[${config.host}]` : config.host;
   logger.log('info', 'server', `Signal Automator running at http://${shownHost}:${port}`);
-
-  let shuttingDown = false;
-  const shutdown = async (signal: string) => {
-    if (shuttingDown) {
-      process.exit(1);
-    }
-    shuttingDown = true;
-    logger.log('info', 'server', `${signal} received, shutting down`);
-    const force = setTimeout(() => process.exit(1), 10000);
-    force.unref();
-    try {
-      await automator.stop();
-    } catch (err) {
-      logger.log('error', 'server', `automator.stop failed: ${(err as Error).message}`);
-    }
-    try {
-      await transport.close();
-    } catch (err) {
-      logger.log('error', 'server', `transport.close failed: ${(err as Error).message}`);
-    }
-    try {
-      await store.flush();
-    } catch (err) {
-      logger.log('error', 'server', `store.flush failed: ${(err as Error).message}`);
-    }
-    closeWs();
-    server.closeAllConnections?.();
-    server.close(() => process.exit(0));
-  };
-  process.on('SIGINT', () => void shutdown('SIGINT'));
-  process.on('SIGTERM', () => void shutdown('SIGTERM'));
 }
 
 main().catch((err) => {
-  console.error(`Signal Automator failed to start: ${(err as Error).stack ?? err}`);
+  const e = err as NodeJS.ErrnoException & { address?: string; port?: number };
+  if (e?.code === 'EADDRINUSE') {
+    console.error(
+      `Signal Automator failed to start: ${e.address ?? ''}:${e.port ?? ''} is already in use. ` +
+        `Is Signal Automator already running? (Set AUTOMATOR_PORT to use another port.)`,
+    );
+  } else {
+    console.error(`Signal Automator failed to start: ${e?.stack ?? err}`);
+  }
   process.exit(1);
 });

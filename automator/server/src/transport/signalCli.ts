@@ -17,6 +17,8 @@ export interface SignalCliTransportOptions {
   maxBackoffMs?: number;
   /** Per-RPC timeout in ms (default 60000). */
   rpcTimeoutMs?: number;
+  /** How long to wait for the event stream's response headers before giving up on an attempt (default 10000). */
+  connectTimeoutMs?: number;
 }
 
 export class RpcError extends Error {
@@ -136,12 +138,14 @@ export class SignalCliTransport implements SignalTransport {
   private readonly minBackoff: number;
   private readonly maxBackoff: number;
   private readonly rpcTimeout: number;
+  private readonly connectTimeout: number;
   private account: string | null;
   private st: TransportStatus;
   private envSubs = new Set<(e: Envelope) => void>();
   private statusSubs = new Set<(s: TransportStatus) => void>();
   private abort: AbortController | null = null;
-  private closed = false;
+  /** Bumped by close(); a receive loop from an older generation stops. */
+  private generation = 0;
   private started: Promise<void> | null = null;
   private rpcId = 0;
   private wakeSleep: (() => void) | null = null;
@@ -154,6 +158,7 @@ export class SignalCliTransport implements SignalTransport {
     this.minBackoff = opts.minBackoffMs ?? 1000;
     this.maxBackoff = opts.maxBackoffMs ?? 30000;
     this.rpcTimeout = opts.rpcTimeoutMs ?? 60000;
+    this.connectTimeout = opts.connectTimeoutMs ?? 10000;
     this.st = { kind: 'signal-cli', state: 'disconnected', account: this.account, detail: null };
   }
 
@@ -177,15 +182,15 @@ export class SignalCliTransport implements SignalTransport {
 
   connect(): Promise<void> {
     if (this.started) return this.started;
-    this.closed = false;
+    const gen = this.generation;
     this.started = new Promise<void>((resolve, reject) => {
-      void this.loop(resolve, reject);
+      void this.loop(gen, resolve, reject);
     });
     return this.started;
   }
 
   async close(): Promise<void> {
-    this.closed = true;
+    this.generation++;
     this.abort?.abort();
     this.wakeSleep?.();
     this.started = null;
@@ -254,10 +259,11 @@ export class SignalCliTransport implements SignalTransport {
 
   // ---------------------------------------------------------------- receive
 
-  private async loop(resolve: () => void, reject: (e: Error) => void): Promise<void> {
+  private async loop(gen: number, resolve: () => void, reject: (e: Error) => void): Promise<void> {
+    const closed = () => this.generation !== gen;
     let first = true;
     let backoff = this.minBackoff;
-    while (!this.closed) {
+    while (!closed()) {
       this.setStatus('connecting', null);
       let opened = false;
       try {
@@ -271,11 +277,11 @@ export class SignalCliTransport implements SignalTransport {
             resolve();
           }
         });
-        if (this.closed) break;
+        if (closed()) break;
         this.setStatus('connecting', 'event stream ended; reconnecting');
         this.logger.log('warn', 'transport', 'signal-cli event stream ended; reconnecting');
       } catch (err) {
-        if (this.closed) break;
+        if (closed()) break;
         const msg = `signal-cli ${opened ? 'event stream failed' : 'unreachable'} at ${this.baseUrl}: ${errMsg(err)}`;
         this.setStatus('error', msg);
         this.logger.log(first ? 'error' : 'warn', 'transport', `${msg} (retrying in ${Math.round(backoff / 1000)}s)`);
@@ -284,7 +290,7 @@ export class SignalCliTransport implements SignalTransport {
           reject(new Error(msg));
         }
       }
-      if (this.closed) break;
+      if (closed()) break;
       await this.sleep(backoff);
       backoff = Math.min(backoff * 2, this.maxBackoff);
     }
@@ -294,10 +300,24 @@ export class SignalCliTransport implements SignalTransport {
     const ac = new AbortController();
     this.abort = ac;
     try {
-      const res = await this.fetch(`${this.baseUrl}/api/v1/events`, {
-        headers: { accept: 'text/event-stream' },
-        signal: ac.signal,
-      });
+      // A daemon that accepts the connection but never answers must not stall connect() for minutes.
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        ac.abort();
+      }, this.connectTimeout);
+      let res: Response;
+      try {
+        res = await this.fetch(`${this.baseUrl}/api/v1/events`, {
+          headers: { accept: 'text/event-stream' },
+          signal: ac.signal,
+        });
+      } catch (err) {
+        if (timedOut) throw new Error(`no response within ${this.connectTimeout}ms`);
+        throw err;
+      } finally {
+        clearTimeout(timer);
+      }
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
       onOpen();
       const parser = new SseParser();
